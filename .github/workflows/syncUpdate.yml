@@ -1,0 +1,69 @@
+name: Sync Public Update
+
+on:
+  schedule:
+    - cron: '0 0 */7 * *' # Chạy lúc 00:00 mỗi 7 ngày
+  push:
+    paths:
+      - '.github/workflows/syncUpdate.yml'
+  workflow_dispatch: # Chạy thủ công
+
+jobs:
+  sync-and-update:
+    runs-on: ubuntu-slim
+    permissions:
+      contents: write
+
+    steps:
+      # 1. Checkout repo hiện tại
+      - name: Checkout current repository
+        uses: actions/checkout@v4
+
+      # 2. Sparse checkout CHỈ folder "template" từ Upstream
+      - name: Fetch only specific folder from Upstream
+        run: |
+          mkdir upstream-temp
+          cd upstream-temp
+          git init
+          git remote add origin https://github.com/G4brym/R2-Explorer.git
+          git config core.sparseCheckout true
+          echo "template" >> .git/info/sparse-checkout
+          git pull --depth=1 origin main
+
+      # 3. Đồng bộ vào thư mục gốc của repo, bảo vệ các file quan trọng
+      - name: Copy & Sync to Local Folder
+        run: |
+          #thêm upstream-temp vào .gitignore 
+          echo "upstream-temp/" >> upstream-temp/template/.gitignore
+          
+          # đổi tên bucket
+          sed -i 's/bucket_name = "bucket"/bucket_name = "r2-explorer-bucket"/g' upstream-temp/template/wrangler.toml
+          
+          # đổi cấu hình chỉ đọc
+          sed -i 's/readonly: true,/readonly: false, cfAccessTeamName: "emailotp",/g' upstream-temp/template/src/index.ts
+          
+          # đổi cấu hình đăng nhập
+          #sed -i 's/\/\/ cfAccessTeamName: "my-team-name",/ cfAccessTeamName: "emailotp",/g' upstream-temp/template/src/index.ts
+          
+          
+          # Đồng bộ từ upstream-temp/template/ vào thư mục hiện tại (./)
+          # Loại trừ .git, .github, upstream-temp để không bị ghi đè hoặc bị xóa
+          rsync -av --delete \
+            --exclude '.git/' \
+            --exclude '.github/' \
+            --exclude 'upstream-temp/' \
+            upstream-temp/template/ ./
+
+      # 4. Commit & Push nếu có thay đổi
+      - name: Commit and Push Changes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+
+          if git diff --staged --quiet; then
+            echo "Không có thay đổi mới từ repo nguồn."
+          else
+            git commit -m "chore(sync): update template from upstream"
+            git push origin main
+          fi
